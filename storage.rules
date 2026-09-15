@@ -1,0 +1,16 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /pickups/{uid}/{fileName} {
+      // Any signed-in user can view a pickup photo (needed by recyclers
+      // browsing the dashboard); only the owning collector can upload one,
+      // capped at 5MB and images only.
+      allow read: if request.auth != null;
+      allow write: if request.auth != null &&
+        request.auth.uid == uid &&
+        request.resource.size < 5 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/.*');
+      allow delete: if false;
+    }
+  }
+}

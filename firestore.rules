@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // A user counts as a recycler once they have a recyclers/{uid} doc,
+    // which is created at sign-up time in app.js.
+    function isRecycler() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/recyclers/$(request.auth.uid));
+    }
+
+    match /recyclers/{uid} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid);
+      allow update, delete: if false;
+    }
+
+    // Rate card and any other shared config: readable by any signed-in
+    // user (anonymous collectors included, so the app can display prices),
+    // but never writable from a client — edit it in the console or via a
+    // trusted Cloud Function only.
+    match /config/{docId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    match /pickup_requests/{requestId} {
+      // A collector can read only their own lots; a recycler can read all.
+      allow read: if isSignedIn() &&
+        (isRecycler() || resource.data.collectorId == request.auth.uid);
+
+      // A collector may create a request, but only tagged with their own
+      // uid, only starting at "Requested", with sane required fields, and
+      // never pre-setting earnings themselves.
+      allow create: if isSignedIn() &&
+        request.resource.data.collectorId == request.auth.uid &&
+        request.resource.data.status == "Requested" &&
+        request.resource.data.weight is number &&
+        request.resource.data.weight > 0 &&
+        request.resource.data.type in [
+          "Printed Circuit Boards (PCBs)",
+          "Copper Cables & Wires",
+          "Batteries (Li-ion/Lead Acid)",
+          "Display Screens / CRTs",
+          "Mixed Electronic Scrap"
+        ] &&
+        !("earnings" in request.resource.data);
+
+      // Only an authorized recycler can move a request through its
+      // lifecycle, and only the status/history/earnings fields may change
+      // — weight, type, photo, and ownership are locked after creation.
+      allow update: if isRecycler() &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["status", "statusHistory", "earnings"]);
+
+      allow delete: if false;
+    }
+  }
+}
